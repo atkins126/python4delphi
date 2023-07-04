@@ -123,13 +123,14 @@ begin
     if Is_venv then begin
       TPythonEngine(PythonEngine).VenvPythonExe := PythonExecutable;
       TPythonEngine(PythonEngine).SetPythonHome(DLLPath);
-    end else if not IsRegistered or Is_conda then
+    end else
       {
-         Not sure why but PythonHome needs to be set even for
-         registered conda distributions
-         Note also that for conda distributions to work properly,
+         Note that for conda distributions to work properly,
          you need to add Format('%s;%0:s\Library\bin;', [Version.InstallPath]
          to your Windows path if it is not there already.
+
+         Following the advice in https://github.com/python/cpython/issues/100171
+         SetPythonHome is called even for registered versions
       }
       TPythonEngine(PythonEngine).SetPythonHome(InstallPath);
   end;
@@ -166,17 +167,24 @@ end;
 function TPythonVersion.GetHelpFile: string;
 var
   PythonHelpFilePath: string;
+  HtmlIndex: string;
   Res: Integer;
   SR: TSearchRec;
 begin
   Result := FHelpFile;
-  // for unregistered Python
-  if (Result = '') and (InstallPath <> '') then
+  // for unregistered Python or python 11
+  if ((Result = '') or (ExtractFileExt(Result) = '.html')) and (InstallPath <> '') then
   begin
-    PythonHelpFilePath := InstallPath + '\Doc\python*.chm';
+    PythonHelpFilePath := IncludeTrailingPathDelimiter(InstallPath) + 'Doc\python*.chm';
     Res := FindFirst(PythonHelpFilePath, faAnyFile, SR);
     if Res = 0 then
-      Result := InstallPath + '\Doc\' + SR.Name;
+      Result := IncludeTrailingPathDelimiter(InstallPath) + 'Doc\' + SR.Name
+    else if Result = '' then
+    begin
+      HtmlIndex := IncludeTrailingPathDelimiter(InstallPath) + 'Doc\html\index.html';
+      if FileExists(HtmlIndex) then
+        Result := HtmlIndex;
+    end;
     FindClose(SR);
   end;
 end;
