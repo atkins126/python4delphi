@@ -1,3 +1,16 @@
+(**************************************************************************)
+(*  This unit is part of the Python for Delphi (P4D) library              *)
+(*  Project home: https://github.com/pyscripter/python4delphi             *)
+(*                                                                        *)
+(*  Project Maintainer:  PyScripter (pyscripter@gmail.com)                *)
+(*  Original Authors:    Dr. Dietmar Budelsky (dbudelsky@web.de)          *)
+(*                       Morgan Martinet (https://github.com/mmm-experts) *)
+(*  Core developer:      Lucas Belo (lucas.belo@live.com)                 *)
+(*  Contributors:        See contributors.md at project home              *)
+(*                                                                        *)
+(*  LICENCE and Copyright: MIT (see project home)                         *)
+(**************************************************************************)
+
 {$I Definition.Inc}
 
 unit WrapDelphiClasses;
@@ -199,6 +212,9 @@ type
     function Set_Text( AValue : PPyObject; AContext : Pointer) : integer; cdecl;
     // Virtual Methods
     function Assign(ASource : PPyObject) : PPyObject; override;
+    {$IFDEF EXTENDED_RTTI}
+    class function ExcludedExposedMembers(APythonType: TPythonType): TArray<string>; override;
+    {$ENDIF EXTENDED_RTTI}
   public
     function  Repr : PPyObject; override;
     // Mapping services
@@ -317,6 +333,7 @@ type
     function GetDelphiObject: TMemoryStream;
     procedure SetDelphiObject(const Value: TMemoryStream);
   public
+    constructor CreateWith(APythonType: TPythonType; args, kwds: PPyObject); override;
     // Class methods
     class function  DelphiObjectClass : TClass; override;
     // Properties
@@ -1244,7 +1261,7 @@ var
   _obj : PPyObject;
   _owner : TObject;
 begin
-  inherited;
+  Create(APythonType);
   if APythonType.Engine.PyArg_ParseTuple( args, 'O:Create',@_obj ) <> 0 then
   begin
     _owner := nil;
@@ -1506,6 +1523,15 @@ begin
     Result := nil;
 end;
 
+{$IFDEF EXTENDED_RTTI}
+class function TPyDelphiStrings.ExcludedExposedMembers(APythonType: TPythonType): TArray<string>;
+begin
+  Result := inherited ExcludedExposedMembers(APythonType);
+  // so that TPyDelphiStrings.Assign is called from the inherited Assign
+  Result := Result + ['Assign'];
+end;
+{$ENDIF EXTENDED_RTTI}
+
 class function TPyDelphiStrings.GetContainerAccessClass: TContainerAccessClass;
 begin
   Result := TStringsAccess;
@@ -1675,7 +1701,7 @@ end;
 class procedure TPyDelphiStrings.SetupType(PythonType: TPythonType);
 begin
   inherited;
-  PythonType.Services.Mapping  := PythonType.Services.Mapping  + [msLength, msSubscript];
+  PythonType.Services.Mapping  := {PythonType.Services.Mapping  +} [msLength, msSubscript];
 end;
 
 { TPyDelphiBasicAction }
@@ -1925,9 +1951,8 @@ end;
 
 class procedure TPyDelphiStream.RegisterMethods(PythonType: TPythonType);
 begin
-  inherited;
   PythonType.AddMethod('ReadBytes', @TPyDelphiStream.ReadBytes_Wrapper,
-    'TPyDelphiStream.ReadBytes()' + #10 + 'Read content as bytearray.');
+    'TPyDelphiStream.ReadBytes()' + #10 + 'Read content as bytes.');
   PythonType.AddMethod('ReadInt', @TPyDelphiStream.ReadInt_Wrapper,
     'TPyDelphiStream.ReadInt()' + #10 + 'Read content as integer.');
   PythonType.AddMethod('ReadString', @TPyDelphiStream.ReadString_Wrapper,
@@ -1936,7 +1961,7 @@ begin
     'TPyDelphiStream.ReadFloat()' + #10 + 'Read content as float.');
 
   PythonType.AddMethod('WriteBytes', @TPyDelphiStream.WriteBytes_Wrapper,
-    'TPyDelphiStream.WriteBytes()' + #10 + 'Write content as bytearray.');
+    'TPyDelphiStream.WriteBytes()' + #10 + 'Write content as bytes.');
   PythonType.AddMethod('WriteInt', @TPyDelphiStream.WriteInt_Wrapper,
     'TPyDelphiStream.WriteInt()' + #10 + 'Write content as integer.');
   PythonType.AddMethod('WriteString', @TPyDelphiStream.WriteString_Wrapper,
@@ -1978,7 +2003,7 @@ begin
         Py_XDecRef(LItem);
       end;
       //The content
-      LItem := PyByteArray_FromObject(LBytes);
+      LItem := PyBytes_FromObject(LBytes);
       Py_XDecRef(LBytes);
       PyList_Append(Result, LItem);
       Py_XDecRef(LItem);
@@ -2060,9 +2085,9 @@ begin
   Adjust(@Self);
   Result := nil;
   with GetPythonEngine() do begin
-    if PyArg_ParseTuple(AArgs, 'Yi:Create', @LValue, @LCount) <> 0 then
-      if PyByteArray_Check(LValue) then begin
-        LBuffer := TEncoding.Default.GetBytes(String(PyByteArray_AsString(LValue)));
+    if PyArg_ParseTuple(AArgs, 'Si:Create', @LValue, @LCount) <> 0 then
+      if PyBytes_Check(LValue) then begin
+        LBuffer := TEncoding.Default.GetBytes(String(PyBytesAsAnsiString(LValue)));
         Result := PyLong_FromLong(DelphiObject.Write(LBuffer, LCount));
       end;
   end;
@@ -2119,7 +2144,7 @@ var
   LParamCount: NativeInt;
   LHandle: THandle;
 begin
-  inherited;
+  Create(APythonType);
   //Clear unsuccessful overloaded constructor error
   APythonType.Engine.PyErr_Clear();
 
@@ -2282,6 +2307,15 @@ end;
 
 { TPyDelphiMemoryStream }
 
+constructor TPyDelphiMemoryStream.CreateWith(APythonType: TPythonType; args, kwds: PPyObject);
+type
+  TMemoryStreamClass = class of TMemoryStream;
+begin
+  Create(APythonType);
+  if APythonType.Engine.PyArg_ParseTuple(args, ':Create') <> 0 then
+    DelphiObject := TMemoryStreamClass(DelphiObjectClass).Create;
+end;
+
 class function TPyDelphiMemoryStream.DelphiObjectClass: TClass;
 begin
   Result := TMemoryStream;
@@ -2315,13 +2349,13 @@ begin
       if APythonType.Engine.PyByteArray_Check(LBytes) then begin
         DelphiObject := TBytesStreamClass(DelphiObjectClass).Create(
           TEncoding.Default.GetBytes(
-            String(APythonType.Engine.PyByteArray_AsString(LBytes))));
+            String(APythonType.Engine.PyByteArrayAsAnsiString(LBytes))));
       end;
     end else if APythonType.Engine.PyArg_ParseTuple(args, 'S:Create', @LBytes) <> 0 then begin
       if APythonType.Engine.PyBytes_Check(LBytes) then begin
         DelphiObject := TBytesStreamClass(DelphiObjectClass).Create(
           TEncoding.Default.GetBytes(
-            String(APythonType.Engine.PyBytes_AsString(LBytes))));
+            String(APythonType.Engine.PyBytesAsAnsiString(LBytes))));
       end;
     end;
 

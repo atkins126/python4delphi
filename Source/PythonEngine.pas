@@ -1,56 +1,14 @@
 ﻿(**************************************************************************)
+(*  This unit is part of the Python for Delphi (P4D) library              *)
+(*  Project home: https://github.com/pyscripter/python4delphi             *)
 (*                                                                        *)
-(* Module:  Unit 'PythonEngine'     Copyright (c) 1997                    *)
+(*  Project Maintainer:  PyScripter (pyscripter@gmail.com)                *)
+(*  Original Authors:    Dr. Dietmar Budelsky (dbudelsky@web.de)          *)
+(*                       Morgan Martinet (https://github.com/mmm-experts) *)
+(*  Core developer:      Lucas Belo (lucas.belo@live.com)                 *)
+(*  Contributors:        See contributors.md at project home              *)
 (*                                                                        *)
-(*                                  Dr. Dietmar Budelsky                  *)
-(*                                  dbudelsky@web.de                      *)
-(*                                  Germany                               *)
-(*                                                                        *)
-(*                                  Morgan Martinet                       *)
-(*                                  4723 rue Brebeuf                      *)
-(*                                  H2J 3L2 MONTREAL (QC)                 *)
-(*                                  CANADA                                *)
-(*                                  e-mail: p4d@mmm-experts.com           *)
-(*                                                                        *)
-(*                                  PyScripter                            *)
-(*                                  e-mail: pyscripter@gmail.com          *)
-(*                                                                        *)
-(*  Project page: https://github.com/pyscripter/python4delphi             *)
-(**************************************************************************)
-(*  Functionality:  Delphi Components that provide an interface to the    *)
-(*                  Python language (see python.txt for more infos on     *)
-(*                  Python itself).                                       *)
-(*                                                                        *)
-(**************************************************************************)
-(*  Contributors:                                                         *)
-(*      Grzegorz Makarewicz (mak@mikroplan.com.pl)                        *)
-(*      Andrew Robinson (andy@hps1.demon.co.uk)                           *)
-(*      Mark Watts(mark_watts@hotmail.com)                                *)
-(*      Olivier Deckmyn (olivier.deckmyn@mail.dotcom.fr)                  *)
-(*      Sigve Tjora (public@tjora.no)                                     *)
-(*      Mark Derricutt (mark@talios.com)                                  *)
-(*      Igor E. Poteryaev (jah@mail.ru)                                   *)
-(*      Yuri Filimonov (fil65@mail.ru)                                    *)
-(*      Stefan Hoffmeister (Stefan.Hoffmeister@Econos.de)                 *)
-(*      Michiel du Toit (micdutoit@hsbfn.com) - Lazarus Port              *)
-(*      Chris Nicolai (nicolaitanes@gmail.com)                            *)
-(*      Andrey Gruzdev (andrey.gruzdev@gmail.com)                         *)
-(**************************************************************************)
-(* This source code is distributed with no WARRANTY, for no reason or use.*)
-(* Everyone is allowed to use and change this code free for his own tasks *)
-(* and projects, as long as this header and its copyright text is intact. *)
-(* For changed versions of this code, which are public distributed the    *)
-(* following additional conditions have to be fullfilled:                 *)
-(* 1) The header has to contain a comment on the change and the author of *)
-(*    it.                                                                 *)
-(* 2) A copy of the changed source has to be sent to the above E-Mail     *)
-(*    address or my then valid address, if this is possible to the        *)
-(*    author.                                                             *)
-(* The second condition has the target to maintain an up to date central  *)
-(* version of the component. If this condition is not acceptable for      *)
-(* confidential or legal reasons, everyone is free to derive a component  *)
-(* or to generate a diff file to my or other original sources.            *)
-(* Dr. Dietmar Budelsky, 1997-11-17                                       *)
+(*  LICENCE and Copyright: MIT (see project home)                         *)
 (**************************************************************************)
 
 {$I Definition.Inc}
@@ -182,6 +140,7 @@ const
   METH_KEYWORDS = $0002;
   METH_CLASS    = $0010;
   METH_STATIC   = $0020;
+  METH_COEXIST  = $0040;
 
   // Masks for the co_flags field of PyCodeObject
   CO_OPTIMIZED   = $0001;
@@ -651,7 +610,6 @@ type
     m_free : inquiry;
   end;
 
-
   // object.h
   PyTypeObject = {$IFDEF CPUX86}packed{$ENDIF} record
     ob_refcnt:      NativeInt;
@@ -740,6 +698,7 @@ type
     tp_xxx8             : NativeInt;
     tp_xxx9             : NativeInt;
     tp_xxx10            : NativeInt;
+    tp_pythontype       : Pointer; // Introduced for FindPythonType optimization
   end;
 
   // from pystate.h
@@ -1237,7 +1196,8 @@ type
 
     procedure LoadPythonInfoFromModule;
     function GetPythonModuleFromProcess(): NativeUInt;
-    function HasHostSymbols(): boolean;
+    // Check for Python symbols in the current loaded library (FDLLHandle)
+    function HasPythonSymbolsInLibrary(): boolean;
     procedure LoadFromHostSymbols();
     //Loading strategies
     function TryLoadFromHostSymbols(): boolean;
@@ -1612,6 +1572,7 @@ type
     PyBytes_Size:function (ob:PPyObject):NativeInt; cdecl;
     PyBytes_DecodeEscape:function(s:PAnsiChar; len:NativeInt; errors:PAnsiChar; unicode:NativeInt; recode_encoding:PAnsiChar):PPyObject; cdecl;
     PyBytes_Repr:function(ob:PPyObject; smartquotes:integer):PPyObject; cdecl;
+    PyBytes_FromObject: function(ob:PPyObject): PPyObject; cdecl;
     PyByteArray_Concat: procedure(var ob1: PPyObject; ob2: PPyObject); cdecl;
     PyByteArray_Resize: procedure(var ob1: PPyObject; len: Py_ssize_t); cdecl;
     PyByteArray_FromObject: function(ob:PPyObject): PPyObject; cdecl;
@@ -1942,7 +1903,7 @@ type
     procedure  AddClient( client : TEngineClient );
     procedure  RemoveClient( client : TEngineClient );
     function   FindClient( const aName : string ) : TEngineClient;
-    function   FindPythonType( const TypeName : AnsiString ) : TPythonType;
+    function   FindPythonType(const TypeName : AnsiString): TPythonType;
     function   TypeByName( const aTypeName : AnsiString ) : PPyTypeObject;
     function   ModuleByName( const aModuleName : AnsiString ) : PPyObject;
     function   MethodsByName( const aMethodsContainer: string ) : PPyMethodDef;
@@ -1987,6 +1948,7 @@ type
     function PyUnicodeAsString( obj : PPyObject ) : UnicodeString;
     function PyUnicodeAsUTF8String( obj : PPyObject ) : RawByteString;
     function PyBytesAsAnsiString( obj : PPyObject ) : AnsiString;
+    function PyByteArrayAsAnsiString( obj : PPyObject ) : AnsiString;
 
     // Public Properties
     property ClientCount : Integer read GetClientCount;
@@ -2401,6 +2363,20 @@ type
         - When turning a Delphi instance into a Python object pointer, GetSelf will offset
           Self from B to A.
         - Properties ob_refcnt and ob_type will call GetSelf to access their data.
+
+        Further Notes:
+        - PyObject instances are not created directly, but via their python type
+          See TPythonType.CreateInstance and TPythonType.NewSubtypeInst (tp_new
+          slot).  In the second case TPy_Object.NewInstance is not called and
+          the size of the memory is determined by the tp_basicsize slot.
+        - Their memory can be allocated either by pascal or python. PythonAlloc
+          keeps track of how the PyObject memory was allocated.
+        - PyObject instances are not destroyed directly, but by PyObjectDestructor
+          when their reference count goes down to zero  (tp_dealloc slot)
+        - The value of PythonAlloc determines how the memory is freed
+          using either PyObject_Free (tp_free slot) or in the overwritten
+          FreeInstance.
+        - This class is heart of the P4D library.  Pure magic!!
 }
   // The base class of all new Python types
   TPyObject = class
@@ -2416,8 +2392,7 @@ type
 
     // Constructors & Destructors
     constructor Create(APythonType: TPythonType); virtual;
-    constructor CreateWith(APythonType: TPythonType; args: PPyObject); overload; virtual;
-    constructor CreateWith(APythonType: TPythonType; args, kwds: PPyObject); overload; virtual;
+    constructor CreateWith(APythonType: TPythonType; args, kwds: PPyObject); virtual;
     destructor  Destroy; override;
 
     class function NewInstance: TObject; override;
@@ -2720,7 +2695,7 @@ type
 
     // Constructors & Destructors
     constructor Create( APythonType : TPythonType ); override;
-    constructor CreateWith(APythonType: TPythonType; args: PPyObject); override;
+    constructor CreateWith(APythonType: TPythonType; args, kwds: PPyObject); override;
     destructor  Destroy; override;
 
     // Type services
@@ -2804,9 +2779,9 @@ function  pyio_GetTypesStats(self, args : PPyObject) : PPyObject; cdecl;
 function  GetPythonEngine : TPythonEngine;
 function  PythonOK : Boolean;
 function  PythonToDelphi( obj : PPyObject ) : TPyObject;
+function FindPythonType(PyType: PPyTypeObject): TPythonType;
 function  IsDelphiObject( obj : PPyObject ) : Boolean;
 procedure PyObjectDestructor( pSelf : PPyObject); cdecl;
-procedure FreeSubtypeInst(ob:PPyObject); cdecl;
 procedure Register;
 function  PyType_HasFeature(AType : PPyTypeObject; AFlag : Integer) : Boolean;
 function  SysVersionFromDLLName(const DLLFileName : string): string;
@@ -3093,16 +3068,10 @@ function TDynamicDll.GetPythonModuleFromProcess(): NativeUInt;
 {$IFNDEF FPC}
 
 function HasSymbols(const AModule: NativeUInt): boolean;
-  var
-    LPy_GetBuildInfo: function : PAnsiChar; cdecl;
-    LPy_IsInitialized: function: integer; cdecl;
   begin
     FDLLHandle := AModule;
     try
-      LPy_GetBuildInfo := Import('Py_GetBuildInfo', false);
-      LPy_IsInitialized := Import('Py_IsInitialized', false);
-      Result := Assigned(LPy_GetBuildInfo) and Assigned(LPy_GetBuildInfo())
-        and Assigned(LPy_IsInitialized) and (LPy_IsInitialized() <> 0);
+      Result := HasPythonSymbolsInLibrary();
     finally
       FDLLHandle := 0;
     end;
@@ -3308,10 +3277,16 @@ end;
 function TDynamicDll.TryLoadFromHostSymbols: boolean;
 begin
   //We want to look in for host symbols at first
+  {$IFNDEF FPC}
+  FDLLHandle := LoadLibrary('');
+  {$ELSE}
   FDLLHandle := 0;
-  Result := HasHostSymbols();
+  {$ENDIF}
+  Result := HasPythonSymbolsInLibrary();
   if Result then
-    LoadFromHostSymbols();
+    LoadFromHostSymbols()
+  else
+    FDLLHandle := 0;
 end;
 
 procedure TDynamicDll.LoadFromHostSymbols;
@@ -3412,12 +3387,15 @@ begin
   Result := Format( 'Dll %s could not be loaded. We must quit.', [DllName]);
 end;
 
-function TDynamicDll.HasHostSymbols: boolean;
+function TDynamicDll.HasPythonSymbolsInLibrary: boolean;
 var
+  LPy_GetBuildInfo: function: PAnsiChar; cdecl;
   LPy_IsInitialized: function: integer; cdecl;
 begin
+  LPy_GetBuildInfo := Import('Py_GetBuildInfo', false);
   LPy_IsInitialized := Import('Py_IsInitialized', false);
-  Result := Assigned(LPy_IsInitialized) and (LPy_IsInitialized() <> 0);
+  Result := Assigned(LPy_GetBuildInfo) and Assigned(LPy_GetBuildInfo())
+    and Assigned(LPy_IsInitialized) and (LPy_IsInitialized() <> 0);
 end;
 
 procedure TDynamicDll.Quit;
@@ -3808,6 +3786,7 @@ begin
   PyBytes_DecodeEscape        := Import('PyBytes_DecodeEscape');
   PyBytes_Repr                := Import('PyBytes_Repr');
   _PyBytes_Resize             := Import('_PyBytes_Resize');
+  PyBytes_FromObject          := Import('PyBytes_FromObject');
   PyByteArray_AsString        := Import('PyByteArray_AsString');
   PyByteArray_Concat          := Import('PyByteArray_Concat');
   PyByteArray_Resize          := Import('PyByteArray_Resize');
@@ -4976,10 +4955,14 @@ begin
     Code := Py_CompileString(PAnsiChar(CleanString(command)),
       PAnsiChar(EncodeString(FileName)), mode);
     if Code = nil then
-      CheckError(False);
-    Result := PyEval_EvalCode(Code, _globals, _locals );
-    if Result = nil then
-      CheckError(False);
+      CheckError(False)
+    else
+    begin
+      Result := PyEval_EvalCode(Code, _globals, _locals );
+      Py_DECREF(Code);
+      if Result = nil then
+        CheckError(False);
+    end;
   except
     if PyErr_Occurred <> nil then
       CheckError(False)
@@ -6037,6 +6020,21 @@ begin
   strings.Clear;
   for i := 0 to PyTuple_Size( tuple ) - 1 do
     strings.Add( PyObjectAsString( PyTuple_GetItem( tuple, i ) ) );
+end;
+
+function TPythonEngine.PyByteArrayAsAnsiString(obj: PPyObject): AnsiString;
+var
+  LBuffer: PAnsiChar;
+  LSize: Py_ssize_t;
+begin
+  if PyByteArray_Check(obj) then
+  begin
+    LSize := PyByteArray_Size(obj);
+    LBuffer := PyByteArray_AsString(obj);
+    SetString(Result, LBuffer, LSize);
+  end
+  else
+    raise EPythonError.CreateFmt(SPyConvertionError, ['PyByteArrayAsAnsiString', 'ByteArray']);
 end;
 
 function TPythonEngine.PyBytesAsAnsiString(obj: PPyObject): AnsiString;
@@ -7450,15 +7448,10 @@ begin
   end;
 end;
 
-constructor TPyObject.CreateWith(APythonType: TPythonType; args: PPyObject);
-begin
-  Create(APythonType);
-end;
-
 constructor TPyObject.CreateWith(APythonType: TPythonType; args,
   kwds: PPyObject);
 begin
-  CreateWith(APythonType, args);
+  Create(APythonType);
 end;
 
 destructor TPyObject.Destroy;
@@ -7975,10 +7968,10 @@ begin
       if Assigned(val) then
         begin
           FType.tp_basicsize := val.InstanceSize + Sizeof(PyObject);
-          val.SetupType( Self );
           val.RegisterMethods( Self );
           val.RegisterMembers( Self );
           val.RegisterGetSets( Self );
+          val.SetupType( Self );
         end;
     end;
 end;
@@ -8194,6 +8187,9 @@ function  TPythonType.NewSubtypeInst( aType: PPyTypeObject; args, kwds : PPyObje
 var
   obj : TPyObject;
 begin
+  // Allocate memory in the python heap for both the pascal and the python
+  // PyObject (see tp_basicsize in SetPyObjectClass)
+  // nitems = 0 because PyType_GenericAlloc adds +1
   Result := aType^.tp_alloc(aType, 0);
   if Assigned(Result) then
   begin
@@ -8207,20 +8203,10 @@ begin
     begin
       Engine.Py_DECREF(Result);
       Result := nil;
+      obj.Free;
     end;
   end;
 end;
-
-function  TPythonType_AllocSubtypeInst( pSelf: PPyTypeObject; nitems : NativeInt) : PPyObject; cdecl;
-begin
-  Result := GetPythonEngine.PyType_GenericAlloc(pSelf, nitems);
-end;
-
-procedure FreeSubtypeInst(ob:PPyObject);
-begin
-  GetPythonEngine.PyObject_Free(ob);
-end;
-
 
 // Number services
 
@@ -8500,9 +8486,9 @@ begin
       if tpfBaseType in TypeFlags then
       begin
         tp_init             := TPythonType_InitSubtype;
-        tp_alloc            := TPythonType_AllocSubtypeInst;
+        tp_alloc            := FEngine.PyType_GenericAlloc;
         tp_new              := GetCallBack( Self, @TPythonType.NewSubtypeInst, 3, DEFAULT_CALLBACK_TYPE);
-        tp_free             := FreeSubtypeInst;
+        tp_free             := FEngine.PyObject_Free;
         tp_methods          := MethodsData;
         tp_members          := MembersData;
         tp_getset           := GetSetData;
@@ -8648,6 +8634,9 @@ begin
         Module.AddClient( Self );
     end;
   InitServices;
+  if Engine.PyType_Ready(TheTypePtr) <> 0 then
+    Engine.CheckError;
+  FType.tp_pythontype := Self;  // Store self into FType
   inherited;
 end;
 
@@ -8656,6 +8645,7 @@ begin
   if Assigned(Engine) then
     Engine.Py_CLEAR(FCreateFunc);
   FCreateFunc := nil;
+
   inherited;
 end;
 
@@ -8953,9 +8943,9 @@ end;
 // the Create constructor first, and because the constructors
 // are virtual, TPyVar.Create will be automatically be called.
 
-constructor TPyVar.CreateWith(APythonType: TPythonType; args: PPyObject);
+constructor TPyVar.CreateWith(APythonType: TPythonType; args, kwds: PPyObject);
 begin
-  inherited;
+  Create(APythonType);
   with GetPythonEngine do
     begin
       if PyArg_ParseTuple( args, 'O:CreateVar',@dv_object ) = 0 then
@@ -9369,27 +9359,27 @@ begin
             (gPythonEngine.Initialized or gPythonEngine.Finalizing);
 end;
 
-function IsDelphiObject( obj : PPyObject ) : Boolean;
+function FindPythonType(PyType: PPyTypeObject): TPythonType;
 var
-  t : PPyTypeObject;
+  Typ : PPyTypeObject;
 begin
-  Result := False;
+  Result := nil;
   // Here's a simple trick: we compare the object destructor to
   // our special destructor for Delphi objects, or
   // we check if one of the parent types of obj has a Delphi destructor.
-  if Assigned(obj) then
+  Typ := PyType;
+  while Assigned(Typ) do
   begin
-    t := obj^.ob_type;
-    while Assigned(t) do
-    begin
-      if @t^.tp_dealloc = @PyObjectDestructor then
-      begin
-        Result := True;
-        Break;
-      end;
-      t := t^.tp_base;
-    end;
+    if @Typ^.tp_dealloc = @PyObjectDestructor then
+      Exit(Typ.tp_pythontype);
+    Typ := Typ^.tp_base;
   end;
+//var
+end;
+
+function IsDelphiObject( obj : PPyObject ) : Boolean;
+begin
+  Result := Assigned(obj) and (FindPythonType(obj^.ob_type) <> nil);
 end;
 
 procedure Register;
