@@ -526,7 +526,7 @@ Type
   TPyDelphiObject = class (TPyInterfacedObject, IFreeNotificationSubscriber)
   private
     fDelphiObject: TObject;
-    fContainerAccess : TContainerAccess;
+    fContainerAccess: TContainerAccess;
     function  GetContainerAccess: TContainerAccess;
     procedure SetDelphiObject(const Value: TObject);
   protected
@@ -714,13 +714,12 @@ Type
   end;
   {$ENDIF}
 
-  TEventHandler = class
+  TBaseEventHandler = class
   private
     fComponent: TObject;
   public
     PyDelphiWrapper : TPyDelphiWrapper;
     PropertyInfo : PPropInfo;
-    EventType : PTypeInfo;
     Callable : PPyObject;
     // connects to the event on creation
     constructor Create(PyDelphiWrapper : TPyDelphiWrapper; Component : TObject;
@@ -729,10 +728,14 @@ Type
     destructor Destroy; override;
     // Disconnects from the free notification event now
     procedure Unsubscribe;
-    // returns the type info of the supported event
-    class function GetTypeInfo : PTypeInfo; virtual; abstract;
     // properties
     property Component : TObject read fComponent;
+  end;
+
+  TEventHandler = class(TBaseEventHandler)
+  public
+    // returns the type info of the supported event
+    class function GetTypeInfo : PTypeInfo; virtual; abstract;
   end;
   TEventHandlerClass = class of TEventHandler;
 
@@ -742,7 +745,7 @@ Type
     fRegisteredClasses : TClassList;
     fPyDelphiWrapper: TPyDelphiWrapper;
     function GetCount: Integer;
-    function GetItem(AIndex: Integer): TEventHandler;
+    function GetItem(AIndex: Integer): TBaseEventHandler;
     function GetRegisteredClass(AIndex: Integer): TEventHandlerClass;
     function GetRegisteredClassCount: Integer;
   protected
@@ -753,7 +756,7 @@ Type
     constructor Create(APyDelphiWrapper : TPyDelphiWrapper);
     destructor Destroy; override;
 
-    function  Add(AEventHandler : TEventHandler) : Boolean;
+    function  Add(AEventHandler : TBaseEventHandler) : Boolean;
     procedure Clear;
     procedure Delete(AIndex : Integer);
     function  GetCallable(AComponent : TObject; APropInfo : PPropInfo) : PPyObject; overload;
@@ -765,7 +768,7 @@ Type
     function  Unlink(AComponent : TObject; APropInfo : PPropInfo) : Boolean;
 
     property Count : Integer read GetCount;
-    property Items[AIndex : Integer] : TEventHandler read GetItem; default;
+    property Items[AIndex : Integer] : TBaseEventHandler read GetItem; default;
     property PyDelphiWrapper : TPyDelphiWrapper read fPyDelphiWrapper;
   end;
 
@@ -969,8 +972,8 @@ Type
                               AExpectedClass : TClass;
                               out AValue : TObject) : Boolean;
   function  CheckCallableAttribute(AAttribute : PPyObject; const AAttributeName : string) : Boolean;
-  function  CheckEnum(const AEnumName : string; AValue, AMinValue, AMaxValue : Integer) : Boolean;
-  function  CreateVarParam(PyDelphiWrapper : TPyDelphiWrapper; const AValue : Variant) : PPyObject; overload;
+  function  CheckEnum(const AEnumName : string; AValue, AMinValue, AMaxValue: Integer) : Boolean;
+  function  CreateVarParam(PyDelphiWrapper : TPyDelphiWrapper; const AValue: Variant) : PPyObject; overload;
   function  CreateVarParam(PyDelphiWrapper : TPyDelphiWrapper; AObject: TObject) : PPyObject; overload;
   function  CreateVarParam(PyDelphiWrapper: TPyDelphiWrapper; AClass: TClass): PPyObject; overload;
   function  SetToPython(ATypeInfo: PTypeInfo; AValue : Integer) : PPyObject; overload;
@@ -985,6 +988,15 @@ Type
   function ValidateClassRef(PyValue: PPyObject; RefClass: TClass;
     out ClassRef: TClass; out ErrMsg: string): Boolean;
   procedure InvalidArguments(const MethName, ErrMsg : string);
+{$IFDEF EXTENDED_RTTI}
+  function  CreateVarParam(PyDelphiWrapper : TPyDelphiWrapper;
+    const AValue: TValue) : PPyObject; overload;
+  function TValueToPyObject(const Value: TValue;
+    DelphiWrapper: TPyDelphiWrapper; out ErrMsg: string): PPyObject;
+  function PyObjectToTValue(PyArg : PPyObject; ArgType: TRttiType;
+   out Arg: TValue; out ErrMsg: string): Boolean;
+{$ENDIF}
+
 
 implementation
 
@@ -1010,7 +1022,7 @@ resourcestring
   rs_ErrSequence = 'Wrapper %s does not support sequences';
   rs_ErrInvalidArgs = '"%s" called with invalid arguments.'#$A'Error: %s';
   rs_ErrInvalidRet = 'Call "%s" returned a value that could not be coverted to Python'#$A'Error: %s';
-  rs_IncompatibleArguments = 'Could not find a method with compatible arguments';
+  rs_IncompatibleArguments = 'Expected and actual arguements are incompatible';
   rs_ErrAttrGet = 'Error in getting property "%s".'#$A'Error: %s';
   rs_UnknownAttribute = 'Unknown attribute';
   rs_ErrIterSupport = 'Wrapper %s does not support iterators';
@@ -1038,6 +1050,155 @@ resourcestring
   rs_ErrPythonToValue = 'Unsupported conversion from Python value to TValue';
   rs_ErrNoTypeInfo = 'TypeInfo is not available';
   rs_ErrUnexpected = 'Unexpected error';
+
+
+{$REGION 'TRttiInvokableTypeHelper - "Lifted" from Spring4D"'}
+{***************************************************************************}
+{                                                                           }
+{           Spring Framework for Delphi                                     }
+{                                                                           }
+{           Copyright (c) 2009-2018 Spring4D Team                           }
+{                                                                           }
+{           http://www.spring4d.org                                         }
+{                                                                           }
+{***************************************************************************}
+{                                                                           }
+{  Licensed under the Apache License, Version 2.0 (the "License");          }
+{  you may not use this file except in compliance with the License.         }
+{  You may obtain a copy of the License at                                  }
+{                                                                           }
+{      http://www.apache.org/licenses/LICENSE-2.0                           }
+{                                                                           }
+{  Unless required by applicable law or agreed to in writing, software      }
+{  distributed under the License is distributed on an "AS IS" BASIS,        }
+{  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. }
+{  See the License for the specific language governing permissions and      }
+{  limitations under the License.                                           }
+{                                                                           }
+{***************************************************************************}
+type
+  TRttiInvokableTypeHelper = class helper for TRttiInvokableType
+  public
+    function CreateImplementation(AUserData: Pointer;
+      const ACallback: TMethodImplementationCallback): TMethodImplementation;
+  end;
+
+  // this is the class used to create a TMethodImplementation for a
+  // TRttiInvokableType by passing in an instance of TRttiInvokableType
+  // and "overriding" its private virtual methods
+  TRttiInvokableMethod = class(TRttiMethod)
+  private
+    FType: TRttiInvokableType;
+    constructor Create(AType: TRttiInvokableType);
+  end;
+
+  // this classes is needed to access FParent
+  // it needs to have the exact same fields as System.Rtti.TRttiObject
+  TRttiObjectHack = class abstract
+  protected
+    FHandle: Pointer;
+    FRttiDataSize: Integer;
+    FPackage: TRttiPackage;
+    FParent: TRttiObject;
+  end;
+
+  // this class is needed to "override" private virtual methods
+  // it needs to have the exact same virtual methods as System.Rtti.TRttiMethod
+  TRttiInvokableMethodHack = class(TRttiMember)
+  protected
+    FInvokeInfo: TObject; //TMethodImplementation.TInvokeInfo
+    FType: TRttiInvokableType;
+    function GetMethodKind: TMethodKind; virtual; abstract;
+    function GetCallingConvention: TCallConv; virtual;
+    function GetReturnType: TRttiType; virtual;
+    function GetDispatchKind: TDispatchKind; virtual; abstract;
+    function GetHasExtendedInfo: Boolean; virtual; abstract;
+    function GetVirtualIndex: SmallInt; virtual; abstract;
+    function GetCodeAddress: Pointer; virtual; abstract;
+    function GetIsClassMethod: Boolean; virtual;
+    function GetIsStatic: Boolean; virtual;
+    function DispatchInvoke(Instance: TValue; const Args: array of TValue): TValue; virtual; abstract;
+  public
+    function GetParameters: TArray<TRttiParameter>; virtual;
+  end;
+
+  // this class is needed to "override" the destructor of
+  // the TMethodImplementation instances that are created inside of
+  // TRttiMethod.CreateImplementation
+  TMethodImplementationHack = class(TMethodImplementation)
+  public
+    destructor Destroy; override;
+  end;
+
+function TRttiInvokableMethodHack.GetCallingConvention: TCallConv;
+begin
+  Result := FType.CallingConvention;
+end;
+
+function TRttiInvokableMethodHack.GetIsClassMethod: Boolean;
+begin
+  Result := False;
+end;
+
+function TRttiInvokableMethodHack.GetIsStatic: Boolean;
+begin
+  Result := FType is TRttiProcedureType;
+end;
+
+function TRttiInvokableMethodHack.GetParameters: TArray<TRttiParameter>;
+begin
+  Result := FType.GetParameters;
+end;
+
+function TRttiInvokableMethodHack.GetReturnType: TRttiType;
+begin
+  Result := FType.ReturnType;
+end;
+
+destructor TMethodImplementationHack.Destroy;
+begin
+  if FInvokeInfo <> nil then
+    FInvokeInfo.Free;
+  inherited Destroy;
+end;
+
+constructor TRttiInvokableMethod.Create(AType: TRttiInvokableType);
+var
+  ctx: TRttiContext;
+begin
+  // GetInvokeInfo need the Parent property
+  TRttiObjectHack(Self).FParent := ctx.GetType(TObject);
+  FType := AType;
+  // change the type of this class to the class that has its private
+  // methods "overridden"
+  PPointer(Self)^ := TRttiInvokableMethodHack;
+end;
+
+function TRttiInvokableTypeHelper.CreateImplementation(AUserData: Pointer; //FI:O804
+  const ACallback: TMethodImplementationCallback): TMethodImplementation;
+var
+  m: TRttiMethod;
+begin
+  {$WARN CONSTRUCTING_ABSTRACT OFF}
+  m := TRttiInvokableMethod.Create(Self);
+  try
+    // there is no way to directly create a TMethodImplementation instance
+    // because it requires an instance of the private TInvokeInfo class to be
+    // passed which can only be produced by the private method GetInvokeInfo
+
+    // since TRttiInvokableMethod has the necessary private virtual methods
+    // "overridden" it will create the correct TMethodImplementation instance
+    // for the given TRttiInvokableType
+    Result := m.CreateImplementation(AUserData, ACallback);
+    // "override" the destructor so FInvokeMethod which is not owned by the
+    // TRttiInvokableMethod is properly destroyed at the end
+    PPointer(Result)^ := TMethodImplementationHack;
+  finally
+    m.Free;
+  end;
+end;
+{$ENDREGION 'TRttiInvokableTypeHelper - "Lifted from Spring4D"'}
+
 
 var
   gRegisteredUnits : TRegisteredUnits;
@@ -1108,8 +1269,8 @@ type
     function GetSetterCallback: Pointer;
   public
     destructor Destroy; override;
-    function GetterWrapper(AObj: PPyObject; AContext : Pointer): PPyObject; cdecl;
-    function SetterWrapper(AObj, AValue: PPyObject; AContext: Pointer): Integer; cdecl;
+    function GetterWrapper(AObj: PPyObject; AContext : Pointer): PPyObject; virtual; cdecl;
+    function SetterWrapper(AObj, AValue: PPyObject; AContext: Pointer): Integer; virtual; cdecl;
     property GetterCallback: Pointer read GetGetterCallback;
     property SetterCallback: Pointer read GetSetterCallback;
   end;
@@ -1122,6 +1283,14 @@ type
   TExposedProperty = class(TExposedGetSet)
   protected
     function GetDefaultDocString(): string; override;
+  end;
+
+  TExposedEvent = class(TExposedGetSet)
+  protected
+    function GetDefaultDocString(): string; override;
+  public
+    function GetterWrapper(AObj: PPyObject; AContext : Pointer): PPyObject; override; cdecl;
+    function SetterWrapper(AObj, AValue: PPyObject; AContext: Pointer): Integer; override; cdecl;
   end;
 
   TPyIndexedProperty = class(TPyObject)
@@ -1138,16 +1307,25 @@ type
     function MpAssSubscript(obj1, obj2: PPyObject) : Integer; override;
   end;
 
-  TExposedIndexedProperty = class(TAbstractExposedMember)
-  private
-    FGetterCallback: Pointer;
-    function GetGetterCallback: Pointer;
+  TExposedIndexedProperty = class(TExposedGetSet)
   protected
     function GetDefaultDocString(): string; override;
   public
+    function GetterWrapper(AObj: PPyObject; AContext : Pointer): PPyObject; override; cdecl;
+  end;
+
+  TRttiEventHandler = class(TBaseEventHandler)
+  private
+    FMethodImplementation: TMethodImplementation;
+  public
+    MethodType: TRttiMethodType;
+    function CodeAddress: Pointer;
+    constructor Create(PyDelphiWrapper: TPyDelphiWrapper; Component: TObject;
+      PropertyInfo: PPropInfo; Callable: PPyObject;
+      AMethodType: TRttiMethodType); reintroduce;
     destructor Destroy; override;
-    function GetterWrapper(AObj: PPyObject; AContext : Pointer): PPyObject; cdecl;
-    property GetterCallback: Pointer read GetGetterCallback;
+    class procedure ImplCallback(UserData: Pointer; const Args: TArray<TValue>;
+    out Result: TValue); static;
   end;
 
 { TAbstractExposedMember }
@@ -1164,7 +1342,6 @@ begin
   FParentRtti := AParentRtti;
   FDocString := UTF8Encode(GetDefaultDocString);
 end;
-
 
 { TExposedMethod }
 
@@ -1327,9 +1504,9 @@ var
 begin
   Result := nil;
   if ValidateClassProperty(AObj, FParentRtti.Handle, Obj, LOutMsg) then
-  // TODO:  Optimize out the property/field lookup, by passing FRttiMember
-  // directly to a GetRttiAttr/SetRtti overload
-  Result := GetRttiAttr(Obj, FParentRtti, FRttiMember.Name, FPyDelphiWrapper, LOutMsg);
+    // TODO:  Optimize out the property/field lookup, by passing FRttiMember
+    // directly to a GetRttiAttr/SetRtti overload
+    Result := GetRttiAttr(Obj, FParentRtti, FRttiMember.Name, FPyDelphiWrapper, LOutMsg);
 
   if not Assigned(Result) then
     with GetPythonEngine do
@@ -1380,19 +1557,77 @@ begin
     FParentRtti.Name, FRttiMember.Name, PropertyType]);
 end;
 
-{ TExposedIndexedProperty }
-function TExposedIndexedProperty.GetGetterCallback: Pointer;
-var
-  Method: function (AObj: PPyObject; AContext : Pointer): PPyObject of object; cdecl;
+{ TExposedEvent }
+
+function TExposedEvent.GetDefaultDocString(): string;
 begin
-  if FGetterCallback = nil then
-  begin
-    Method := GetterWrapper;
-    FGetterCallback := GetOfObjectCallBack(TCallBack(Method), 2, DEFAULT_CALLBACK_TYPE);
-  end;
-  Result := FGetterCallback;
+  Result := Format('<Event property %s.%s>', [FParentRtti.Name, FRttiMember.Name])
+    + #10 +(FRttiMember as TRttiProperty).PropertyType.ToString;
 end;
 
+function TExposedEvent.GetterWrapper(AObj: PPyObject; AContext : Pointer): PPyObject;
+var
+  Obj: TObject;
+  RttiProp: TRttiInstanceProperty;
+  LOutMsg: string;
+begin
+  RttiProp := FRttiMember as TRttiInstanceProperty;
+  if ValidateClassProperty(AObj, FParentRtti.Handle, Obj, LOutMsg) then
+    Result := FPyDelphiWrapper.EventHandlers.GetCallable(Obj, RttiProp.PropInfo)
+  else
+    Result := FPyDelphiWrapper.Engine.ReturnNone;
+end;
+
+function TExposedEvent.SetterWrapper(AObj, AValue: PPyObject; AContext: Pointer): Integer;
+var
+  Obj: TObject;
+  RttiProp: TRttiInstanceProperty;
+  ErrMsg: string;
+  EventHandler: TRttiEventHandler;
+  Method: TMethod;
+begin
+  Result := -1;
+  if not CheckCallableAttribute(AValue, FRttiMember.Name) then
+    Exit;
+
+  if ValidateClassProperty(AObj, FParentRtti.Handle, Obj, ErrMsg) then
+  begin
+    try
+      RttiProp := FRttiMember as TRttiInstanceProperty;
+
+      // Remove handler if it exists
+      fPyDelphiWrapper.EventHandlers.Unlink(Obj, RttiProp.PropInfo);
+
+      if AValue = GetPythonEngine.Py_None then
+      begin
+        Method.Code := nil;
+        Method.Data := nil;
+      end
+      else
+      begin
+        EventHandler := TRttiEventHandler.Create(FPyDelphiWrapper, Obj,
+          RttiProp.PropInfo, AValue, RttiProp.PropertyType as TRttiMethodType);
+
+        FPyDelphiWrapper.EventHandlers.Add(EventHandler);
+
+        Method.Code := EventHandler.CodeAddress;
+        Method.Data := EventHandler;
+      end;
+      SetMethodProp(Obj, RttiProp.PropInfo, Method);
+
+      Result := 0;
+    except
+      ErrMsg := rs_ErrUnexpected;
+    end;
+  end;
+
+  if Result <> 0 then
+    with GetPythonEngine do
+      PyErr_SetObject (PyExc_AttributeError^,
+        PyUnicodeFromString(Format(rs_ErrAttrSetr, [FRttiMember.Name, ErrMsg])));
+end;
+
+{ TExposedIndexedProperty }
 function TExposedIndexedProperty.GetDefaultDocString(): string;
 var
   PropertyType: string;
@@ -1404,13 +1639,7 @@ begin
     FParentRtti.Name, FRttiMember.Name, PropertyType]);
 end;
 
-destructor TExposedIndexedProperty.Destroy;
-begin
-  if FGetterCallback <> nil then
-    DeleteCallback(FGetterCallback);
-end;
-
-function TExposedIndexedProperty.GetterWrapper(AObj: PPyObject; AContext : Pointer): PPyObject; cdecl;
+function TExposedIndexedProperty.GetterWrapper(AObj: PPyObject; AContext : Pointer): PPyObject;
 var
   HelperType: TPythonType;
 begin
@@ -1528,6 +1757,100 @@ begin
     Engine.Py_DECREF(TempPy);  //Should be Py_None
     Result := 0; // Signal success
   end;
+end;
+
+{ TRttiEventHandler }
+constructor TRttiEventHandler.Create(PyDelphiWrapper: TPyDelphiWrapper;
+  Component: TObject; PropertyInfo: PPropInfo; Callable: PPyObject;
+  AMethodType: TRttiMethodType);
+begin
+  inherited Create(PyDelphiWrapper, Component, PropertyInfo, Callable);
+  MethodType := AMethodType;
+  FMethodImplementation := AMethodType.CreateImplementation(nil, ImplCallback);
+end;
+
+destructor TRttiEventHandler.Destroy;
+begin
+  FMethodImplementation.Free;
+  inherited;
+end;
+
+function TRttiEventHandler.CodeAddress: Pointer;
+begin
+  if Assigned(FMethodImplementation) then
+    Result := FMethodImplementation.CodeAddress
+  else
+    Result := nil;
+end;
+
+class procedure TRttiEventHandler.ImplCallback(UserData: Pointer;
+  const Args: TArray<TValue>; out Result: TValue);
+var
+  EventHandler: TRttiEventHandler;
+  Params: TArray<TRttiParameter>;
+  PyArgs: PPyObject;
+  PyResult: PPyObject;
+  TempPy: PPyObject;
+  Index: Integer;
+  Engine: TPythonEngine;
+  ErrMsg: string;
+begin
+  EventHandler := Args[0].AsObject as TRttiEventHandler;
+  Params := EventHandler.MethodType.GetParameters;
+
+  if Length(Args) <> Length(Params) + 1 then  // +1 for Self
+  begin
+    InvalidArguments(string(EventHandler.PropertyInfo.Name), rs_IncompatibleArguments);
+    Exit;
+  end;
+
+  Engine := EventHandler.PyDelphiWrapper.Engine;
+
+  // Set up the python arguments
+  PyArgs := Engine.PyTuple_New(Length(Args) - 1);  //Ignore Self
+  try
+    for Index := 1 to Length(Args) - 1 do
+    begin
+      if Params[Index - 1].Flags * [TParamFlag.pfVar, TParamFlag.pfOut] <> [] then
+        TempPy := CreateVarParam(EventHandler.PyDelphiWrapper, Args[Index])
+      else
+        TempPy := TValueToPyObject(Args[Index], EventHandler.PyDelphiWrapper, ErrMsg);
+      if TempPy <> nil then
+        Engine.PyTuple_SetItem(PyArgs, Index - 1, TempPy)
+      else
+      begin
+        InvalidArguments(string(EventHandler.PropertyInfo.Name), rs_IncompatibleArguments);
+        Engine.CheckError;  // will raise an Exception
+      end;
+    end;
+
+    // Make the call
+    PyResult := Engine.PyObject_CallObject(EventHandler.Callable, PyArgs);
+
+    // deal with var/out parameters
+    for Index := 1 to Length(Args) - 1 do
+      if Params[Index - 1].Flags * [TParamFlag.pfVar, TParamFlag.pfOut] <> [] then
+      begin
+        TempPy := Engine.PyTuple_GetItem(PyArgs, Index - 1);
+
+        if not PyObjectToTValue((PythonToDelphi(TempPy) as TPyDelphiVarParameter).Value,
+          Params[Index- 1].ParamType, Args[Index], ErrMsg) then
+        begin
+          InvalidArguments(string(EventHandler.PropertyInfo.Name), rs_IncompatibleArguments);
+          Engine.CheckError;  // will raise an Exception
+        end;
+      end;
+
+    if Assigned(PyResult) and (EventHandler.MethodType.ReturnType <> nil) and
+      not PyObjectToTValue(PyResult, EventHandler.MethodType.ReturnType, Result, ErrMsg)
+    then
+      Engine.PyErr_SetObject(Engine.PyExc_TypeError^, Engine.PyUnicodeFromString(
+        Format(rs_ErrInvalidRet, [string(EventHandler.PropertyInfo.Name), ErrMsg])));
+    Engine.Py_XDECREF(PyResult);
+  finally
+    Engine.Py_XDECREF(PyArgs);
+  end;
+  Engine.CheckError;
 end;
 
 {$ENDIF EXTENDED_RTTI}
@@ -1911,6 +2234,24 @@ begin
       Result := SimpleValueToPython(Value, ErrMsg);
     end;
 end;
+
+function  CreateVarParam(PyDelphiWrapper : TPyDelphiWrapper;
+  const AValue: TValue) : PPyObject;
+var
+  tmp : PPyObject;
+  _varParam : TPyDelphiVarParameter;
+  ErrMsg: string;
+begin
+  tmp := TValueToPyObject(AValue, PyDelphiWrapper, ErrMsg);
+  if tmp = nil then
+    Exit(nil);
+
+  Result := PyDelphiWrapper.VarParamType.CreateInstance;
+  _varParam := PythonToDelphi(Result) as TPyDelphiVarParameter;
+  _varParam.Value := tmp; // refcount was incremented
+  GetPythonEngine.Py_DECREF(tmp);
+end;
+
 {$ENDIF}
 
 function ValidateClassProperty(PyValue: PPyObject; TypeInfo: PTypeInfo;
@@ -3868,7 +4209,7 @@ var
   LRttiType: TRttiStructuredType;
   LRttiProperty: TRttiProperty;
   AddedProperties: TArray<string>;
-  LExposedProperty: TExposedProperty;
+  LExposedProperty: TExposedGetSet;
   LClass: TClass;
   LSetter: Pointer;
   LDocStr: string;
@@ -3906,15 +4247,24 @@ begin
       if not LRttiProperty.IsReadable then
         Continue;
 
-      // Skip if the type cannot be handled (as with fields - tkMethod)
-      if LRttiProperty.PropertyType.TypeKind  in [tkUnknown, tkPointer, tkProcedure] then
-        Continue;
+      if (LRttiProperty.PropertyType is TRttiMethodType) and
+        (LRttiProperty.Visibility = TMemberVisibility.mvPublished) and
+        (APyDelphiWrapper.EventHandlers.FindHandler(LRttiProperty.PropertyType.Handle) = nil)
+      then
+        LExposedProperty := TExposedEvent.Create(LRttiProperty,
+        APyDelphiWrapper, APythonType, LRttiType)
+      else
+      begin
+        // Skip if the type cannot be handled
+        if LRttiProperty.PropertyType.TypeKind in [tkUnknown, tkPointer, tkMethod, tkProcedure] then
+          Continue;
+
+        // Create the exposed property
+        LExposedProperty := TExposedProperty.Create(LRttiProperty,
+          APyDelphiWrapper, APythonType, LRttiType);
+      end;
 
       AddedProperties := AddedProperties + [LRttiProperty.Name];
-
-      // Create the exposed method
-      LExposedProperty := TExposedProperty.Create(LRttiProperty,
-        APyDelphiWrapper, APythonType, LRttiType);
 
       //Try to load the method doc string from doc server
       if Assigned(PyDocServer) and PyDocServer.Initialized and
@@ -3989,8 +4339,8 @@ begin
       if not LRttiProperty.IsReadable then
         Continue;
 
-      // Skip if the type cannot be handled (as with fields - tkMethod)
-      if LRttiProperty.PropertyType.TypeKind  in [tkUnknown, tkPointer, tkProcedure] then
+      // Skip if the type cannot be handled
+      if LRttiProperty.PropertyType.TypeKind  in [tkUnknown, tkPointer, tkMethod, tkProcedure] then
         Continue;
 
       AddedProperties := AddedProperties + [LRttiProperty.Name];
@@ -4445,7 +4795,7 @@ end;
 
 { TEventHandler }
 
-constructor TEventHandler.Create(PyDelphiWrapper : TPyDelphiWrapper;
+constructor TBaseEventHandler.Create(PyDelphiWrapper : TPyDelphiWrapper;
   Component: TObject; PropertyInfo: PPropInfo; Callable: PPyObject);
 var
   _FreeNotification : IFreeNotification;
@@ -4465,7 +4815,7 @@ begin
     (Component as TComponent).FreeNotification(PyDelphiWrapper);
 end;
 
-destructor TEventHandler.Destroy;
+destructor TBaseEventHandler.Destroy;
 var
   Method : TMethod;
 begin
@@ -4488,7 +4838,7 @@ begin
   inherited;
 end;
 
-procedure TEventHandler.Unsubscribe;
+procedure TBaseEventHandler.Unsubscribe;
 var
   _FreeNotification : IFreeNotification;
 begin
@@ -4521,7 +4871,7 @@ end;
 
 { TEventHandlers }
 
-function TEventHandlers.Add(AEventHandler: TEventHandler) : Boolean;
+function TEventHandlers.Add(AEventHandler: TBaseEventHandler) : Boolean;
 begin
   fItems.Add(AEventHandler);
   Result := True;
@@ -4597,9 +4947,9 @@ begin
   Result := fItems.Count;
 end;
 
-function TEventHandlers.GetItem(AIndex: Integer): TEventHandler;
+function TEventHandlers.GetItem(AIndex: Integer): TBaseEventHandler;
 begin
-  Result := TEventHandler(fItems[AIndex]);
+  Result := TBaseEventHandler(fItems[AIndex]);
 end;
 
 function TEventHandlers.GetRegisteredClass(
