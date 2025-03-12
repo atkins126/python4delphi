@@ -11,11 +11,9 @@ object ThreadSortForm: TThreadSortForm
   Font.Height = -11
   Font.Name = 'MS Sans Serif'
   Font.Style = []
-  OldCreateOrder = True
   Position = poScreenCenter
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
-  PixelsPerInch = 96
   TextHeight = 13
   object Bevel1: TBevel
     Left = 8
@@ -173,7 +171,6 @@ object ThreadSortForm: TThreadSortForm
     OnClick = StopBtnClick
   end
   object PythonEngine1: TPythonEngine
-    InitThreads = True
     PyFlags = [pfDebug, pfInteractive, pfVerbose]
     RedirectIO = False
     Left = 16

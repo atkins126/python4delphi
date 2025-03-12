@@ -176,7 +176,6 @@ begin
   PythonEngine.UseLastKnownVersion := True;
 
   PythonEngine.AutoFinalize := True;
-  PythonEngine.InitThreads := True;
   PythonEngine.PyFlags := [pfInteractive];
   PythonEngine.LoadDll;
 
@@ -292,7 +291,7 @@ begin
           FRandomInteger.Value := PythonToTRandomInteger(val1).Value;
     except
       on e: Exception do
-        PyErr_SetString(PyExc_Exception^, PAnsiChar(AnsiString(e.Message)));
+        PyErr_SetString(PyExc_Exception^, PAnsiChar(EncodeString(e.Message)));
     end;
   end;
 end;

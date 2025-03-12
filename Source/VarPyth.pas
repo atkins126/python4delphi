@@ -130,11 +130,11 @@ uses
 type
   TNamedParamDesc = record
     Index : Integer;
-    Name : AnsiString;
+    Name : PAnsiChar;
   end;
   TNamedParamArray = array of TNamedParamDesc;
 
-{$IF not defined(FPC) and (defined(OSX64) or defined(LINUX) or not defined(DELPHI10_4_OR_HIGHER))}
+{$IF not defined(FPC) and (defined(OSX64) or defined(LINUX) or defined(ANDROID) or not defined(DELPHI10_4_OR_HIGHER))}
   {$DEFINE PATCHEDSYSTEMDISPINVOKE}  //To correct memory leaks
 {$IFEND}
 
@@ -940,7 +940,7 @@ const
   CPropertyGet = $02;
   CPropertySet = $04;
 
-{$IF defined(PATCHEDSYSTEMDISPINVOKE) and (defined(OSX64) or defined(LINUX))}
+{$IF defined(PATCHEDSYSTEMDISPINVOKE) and (defined(OSX64) or defined(LINUX) or defined(ANDROID))}
 {
    Fixes https://quality.embarcadero.com/browse/RSP-28097
 }
@@ -1036,14 +1036,11 @@ begin
         varVariant:
           begin
             PVarParm^.VType := varEmpty;
-{$IFDEF CPUX64}
-
-//          PVariant(PVarParm)^ := PVariant(Params^)^;
+            {$IFDEF CPU64BITS}
             PVariant(PVarParm)^ := VarArgGetValue(VAList, PVariant)^;
-{$ELSE}
-//          PVariant(PVarParm)^ := PVariant(Params)^;
+            {$ELSE}
             PVariant(PVarParm)^ := VarArgGetValue(VAList, Variant);
-{$ENDIF}
+            {$ENDIF}
           end;
         varUnknown:   PVarParm^.VUnknown := VarArgGetValue(VAList, Pointer);
         varSmallint:  PVarParm^.VSmallInt := VarArgGetValue(VAList, SmallInt);
@@ -1271,39 +1268,41 @@ procedure TPythonVariantType.DispInvoke(Dest: PVarData;
     LNamedArgStart : Integer;     //arg position of 1st named argument (if any)
     I : integer;
   begin
+    SetLength(fNamedParams, CallDesc^.NamedArgCount);
+    if CallDesc^.NamedArgCount = 0 then
+      Exit;
     LNamePtr := PAnsiChar(@CallDesc^.ArgTypes[CallDesc^.ArgCount]);
     LNamedArgStart := CallDesc^.ArgCount - CallDesc^.NamedArgCount;
-    SetLength(fNamedParams, CallDesc^.NamedArgCount);
     // Skip function Name
     for I := 0 to CallDesc^.NamedArgCount - 1 do begin
       LNamePtr := LNamePtr + Succ(Length(LNamePtr));
       fNamedParams[I].Index := I+LNamedArgStart;
-      fNamedParams[I].Name  := AnsiString(LNamePtr);
+      fNamedParams[I].Name  := LNamePtr;
     end;
   end;
 
 Var
   NewCallDesc : TCallDesc;
 begin
-  if CallDesc^.NamedArgCount > 0 then GetNamedParams;
-  try
-    if (CallDesc^.CallType = CPropertyGet) and (CallDesc^.ArgCount = 1) then begin
+    if CallDesc^.CallType = CDoMethod then
+      GetNamedParams;  // fNamedParams will be cleared in EvalPython
+    if (CallDesc^.CallType = CPropertyGet) and (CallDesc^.ArgCount = 1) then
+    begin
       NewCallDesc := CallDesc^;
       NewCallDesc.CallType := CDoMethod;
-    {$IFDEF PATCHEDSYSTEMDISPINVOKE}
+      SetLength(fNamedParams, 0);
+      {$IFDEF PATCHEDSYSTEMDISPINVOKE}
       PatchedDispInvoke(Dest, Source, @NewCallDesc, Params);
-    {$ELSE PATCHEDSYSTEMDISPINVOKE}
+      {$ELSE PATCHEDSYSTEMDISPINVOKE}
       inherited DispInvoke(Dest, Source, @NewCallDesc, Params);
-    {$ENDIF PATCHEDSYSTEMDISPINVOKE}
-    end else
+      {$ENDIF PATCHEDSYSTEMDISPINVOKE}
+    end
+    else
       {$IFDEF PATCHEDSYSTEMDISPINVOKE}
       PatchedDispInvoke(Dest, Source, CallDesc, Params);
       {$ELSE PATCHEDSYSTEMDISPINVOKE}
       inherited;
       {$ENDIF PATCHEDSYSTEMDISPINVOKE}
-  finally
-    if CallDesc^.NamedArgCount > 0 then SetLength(fNamedParams, 0);
-  end;
 end;
 
 function TPythonVariantType.DoFunction(var Dest: TVarData;
@@ -1519,8 +1518,14 @@ var
   _Args : PPyObject;
   _ArgLen : Integer;
   _KW : PPyObject;
+  LNamedParams : TNamedParamArray;
 begin
   Result := nil;
+
+  // Store global fNamedParams and clear it  ASAP
+  LNamedParams := System.Copy(fNamedParams);
+  SetLength(fNamedParams, 0);
+
   with GetPythonEngine do
   begin
     // extract the associated Python object
@@ -1583,10 +1588,10 @@ begin
             _ArgLen := 0
           else
             _ArgLen := Length(Arguments);
-          if Length(fNamedParams) > 0 then
+          if Length(LNamedParams) > 0 then
           begin
             _KW := PyDict_New;
-            _ArgLen := fNamedParams[0].Index;
+            _ArgLen := LNamedParams[0].Index;
           end
           else
             _KW := nil;
@@ -1595,14 +1600,11 @@ begin
             try
               for i := 0 to _ArgLen-1 do
                 PyTuple_SetItem( _Args, i, ArgAsPythonObject(i) );
-              for i := 0 to Length(fNamedParams)-1 do
-                PyDict_SetItemString(_KW, PAnsiChar(fNamedParams[i].Name), ArgAsPythonObject(fNamedParams[i].Index));
+              for i := 0 to Length(LNamedParams)-1 do
+                PyDict_SetItemString(_KW, LNamedParams[i].Name, ArgAsPythonObject(LNamedParams[i].Index));
 
               // call the func or method, with or without named parameters (KW)
-              if Assigned(_KW) then
-                Result := PyEval_CallObjectWithKeywords(_obj, _Args, _KW)
-              else
-                Result := PyEval_CallObjectWithKeywords(_obj, _Args, nil);
+              Result := PyObject_Call(_obj, _Args, _KW);
               CheckError(True);
             finally
               Py_XDecRef(_Args);
